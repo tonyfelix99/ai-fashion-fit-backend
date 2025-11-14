@@ -1,6 +1,6 @@
 import os
 import json
-import sqlite3
+import pyodbc
 import uuid
 from datetime import datetime
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
@@ -22,6 +22,12 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['GENERATED_FOLDER'] = GENERATED_FOLDER
 
+# Azure SQL Database Configuration
+AZURE_SQL_SERVER = os.environ.get('AZURE_SQL_SERVER', '')  # e.g., 'yourserver.database.windows.net'
+AZURE_SQL_DATABASE = os.environ.get('AZURE_SQL_DATABASE', '')  # e.g., 'fashion_fit_db'
+AZURE_SQL_USERNAME = os.environ.get('AZURE_SQL_USERNAME', '')
+AZURE_SQL_PASSWORD = os.environ.get('AZURE_SQL_PASSWORD', '')
+
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 UPI_ID = os.environ.get('UPI_ID', 'your-upi@bank')
 UPI_NAME = os.environ.get('UPI_NAME', 'Your Name')
@@ -30,36 +36,182 @@ if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
 
+def get_db_connection():
+    """Create and return Azure SQL Database connection"""
+    try:
+        connection_string = (
+            f'DRIVER={{ODBC Driver 18 for SQL Server}};'
+            f'SERVER={AZURE_SQL_SERVER};'
+            f'DATABASE={AZURE_SQL_DATABASE};'
+            f'UID={AZURE_SQL_USERNAME};'
+            f'PWD={AZURE_SQL_PASSWORD};'
+            f'Encrypt=yes;'
+            f'TrustServerCertificate=no;'
+            f'Connection Timeout=30;'
+        )
+        conn = pyodbc.connect(connection_string)
+        return conn
+    except Exception as e:
+        print(f"❌ Database connection error: {e}")
+        raise
+
+
 def init_db():
-    conn = sqlite3.connect('fashion_fit.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS user_info (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT,
-        age INTEGER,
-        gender TEXT,
-        skin_tone TEXT,
-        body_shape TEXT,
-        image_path TEXT,
-        face_shape TEXT,
-        hair_texture TEXT,
-        hairstyle_suggestions TEXT
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS payments (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        transaction_id TEXT UNIQUE,
-        user_id INTEGER,
-        amount REAL,
-        purpose TEXT,
-        status TEXT DEFAULT 'pending',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        confirmed_at TIMESTAMP
-    )''')
-    conn.commit()
-    conn.close()
+    """Initialize database with all tables and migrations"""
+    print("🔄 Initializing Azure SQL Database...")
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Create user_info table with all columns
+        print("📊 Creating/updating user_info table...")
+        cursor.execute('''
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'user_info')
+            BEGIN
+                CREATE TABLE user_info (
+                    id INT IDENTITY(1,1) PRIMARY KEY,
+                    name NVARCHAR(255),
+                    age INT,
+                    gender NVARCHAR(50),
+                    skin_tone NVARCHAR(100),
+                    body_shape NVARCHAR(100),
+                    image_path NVARCHAR(500),
+                    face_shape NVARCHAR(100) DEFAULT 'Oval',
+                    hair_texture NVARCHAR(100) DEFAULT 'Straight',
+                    hairstyle_suggestions NVARCHAR(MAX),
+                    created_at DATETIME2 DEFAULT GETDATE(),
+                    updated_at DATETIME2 DEFAULT GETDATE()
+                )
+            END
+        ''')
+        print("✅ user_info table ready")
+        
+        # Migration: Add missing columns if table already exists
+        print("🔄 Running migrations for user_info...")
+        
+        # Check and add face_shape column
+        cursor.execute('''
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID('user_info') 
+                AND name = 'face_shape'
+            )
+            BEGIN
+                ALTER TABLE user_info ADD face_shape NVARCHAR(100) DEFAULT 'Oval'
+            END
+        ''')
+        
+        # Check and add hair_texture column
+        cursor.execute('''
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID('user_info') 
+                AND name = 'hair_texture'
+            )
+            BEGIN
+                ALTER TABLE user_info ADD hair_texture NVARCHAR(100) DEFAULT 'Straight'
+            END
+        ''')
+        
+        # Check and add hairstyle_suggestions column
+        cursor.execute('''
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID('user_info') 
+                AND name = 'hairstyle_suggestions'
+            )
+            BEGIN
+                ALTER TABLE user_info ADD hairstyle_suggestions NVARCHAR(MAX)
+            END
+        ''')
+        
+        # Check and add created_at column
+        cursor.execute('''
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID('user_info') 
+                AND name = 'created_at'
+            )
+            BEGIN
+                ALTER TABLE user_info ADD created_at DATETIME2 DEFAULT GETDATE()
+            END
+        ''')
+        
+        # Check and add updated_at column
+        cursor.execute('''
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID('user_info') 
+                AND name = 'updated_at'
+            )
+            BEGIN
+                ALTER TABLE user_info ADD updated_at DATETIME2 DEFAULT GETDATE()
+            END
+        ''')
+        
+        print("✅ user_info migrations complete")
+        
+        # Create payments table
+        print("📊 Creating/updating payments table...")
+        cursor.execute('''
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'payments')
+            BEGIN
+                CREATE TABLE payments (
+                    id INT IDENTITY(1,1) PRIMARY KEY,
+                    transaction_id NVARCHAR(100) UNIQUE NOT NULL,
+                    user_id INT,
+                    amount DECIMAL(10, 2),
+                    purpose NVARCHAR(255),
+                    status NVARCHAR(50) DEFAULT 'pending',
+                    created_at DATETIME2 DEFAULT GETDATE(),
+                    confirmed_at DATETIME2,
+                    FOREIGN KEY (user_id) REFERENCES user_info(id)
+                )
+            END
+        ''')
+        print("✅ payments table ready")
+        
+        # Create indexes for better performance
+        print("🔄 Creating indexes...")
+        cursor.execute('''
+            IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_user_info_gender_age')
+            BEGIN
+                CREATE INDEX idx_user_info_gender_age ON user_info(gender, age)
+            END
+        ''')
+        
+        cursor.execute('''
+            IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_payments_transaction_id')
+            BEGIN
+                CREATE INDEX idx_payments_transaction_id ON payments(transaction_id)
+            END
+        ''')
+        
+        cursor.execute('''
+            IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_payments_user_id')
+            BEGIN
+                CREATE INDEX idx_payments_user_id ON payments(user_id)
+            END
+        ''')
+        print("✅ Indexes created")
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        print("✨ Database initialization complete!")
+        
+    except Exception as e:
+        print(f"❌ Database initialization error: {e}")
+        raise
 
 
-init_db()
+# Initialize database on startup
+try:
+    init_db()
+except Exception as e:
+    print(f"⚠️  Warning: Could not initialize database on startup: {e}")
 
 
 def allowed_file(filename):
@@ -181,19 +333,13 @@ Make suggestions practical, modern, and specifically tailored to their face shap
         print(f"Error generating hairstyle suggestions: {e}")
         return {
             "suggestions": [{
-                "name":
-                "Personalized Style",
-                "description":
-                f"A flattering style for your {user_analysis.get('face_shape', 'unique')} face shape",
-                "best_for":
-                "Everyday wear",
-                "maintenance":
-                "Medium",
-                "styling_time":
-                "10-15 minutes",
+                "name": "Personalized Style",
+                "description": f"A flattering style for your {user_analysis.get('face_shape', 'unique')} face shape",
+                "best_for": "Everyday wear",
+                "maintenance": "Medium",
+                "styling_time": "10-15 minutes",
                 "products_needed": ["Styling cream", "Hair spray"],
-                "styling_tips":
-                "Consult with a professional stylist for best results"
+                "styling_tips": "Consult with a professional stylist for best results"
             }]
         }
 
@@ -220,8 +366,7 @@ def match_outfits(user):
         max_age = int(age_parts[1]) if len(age_parts) > 1 else 100
 
         outfit_gender = outfit.get("gender", "").lower()
-        gender_match = (user_gender == outfit_gender
-                        or outfit_gender == "unisex")
+        gender_match = (user_gender == outfit_gender or outfit_gender == "unisex")
         age_match = min_age <= user_age <= max_age
         skin_tones = outfit.get("skin_tones", [])
         skin_match = user_skin_tone in skin_tones
@@ -290,26 +435,30 @@ def analyze():
         ai_analysis = analyze_user_photo(filepath)
 
         # Generate hairstyle suggestions
-        hairstyle_data = generate_hairstyle_suggestions(
-            ai_analysis, gender, age)
+        hairstyle_data = generate_hairstyle_suggestions(ai_analysis, gender, age)
 
         print(f"\n👤 User Profile Created:")
         print(f"   Name: {name}")
         print(f"   Face Shape: {ai_analysis.get('face_shape', 'N/A')}")
         print(f"   Hair Texture: {ai_analysis.get('hair_texture', 'N/A')}")
 
-        # Save to database
-        conn = sqlite3.connect('fashion_fit.db')
-        c = conn.cursor()
-        c.execute(
+        # Save to Azure SQL Database
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
             '''INSERT INTO user_info (name, age, gender, skin_tone, body_shape, image_path, face_shape, hair_texture, hairstyle_suggestions)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
             (name, age, gender, skin_tone, body_shape, filepath,
              ai_analysis.get('face_shape', 'Oval'),
-             ai_analysis.get('hair_texture',
-                             'Straight'), json.dumps(hairstyle_data)))
-        user_id = c.lastrowid
+             ai_analysis.get('hair_texture', 'Straight'), 
+             json.dumps(hairstyle_data)))
+        
+        # Get the inserted ID
+        cursor.execute('SELECT @@IDENTITY AS id')
+        user_id = cursor.fetchone()[0]
+        
         conn.commit()
+        cursor.close()
         conn.close()
 
         # Store in session
@@ -346,8 +495,7 @@ def recommendations():
     }
 
     # Get hairstyle suggestions
-    hairstyle_json = session.get('hairstyle_suggestions',
-                                 '{"suggestions": []}')
+    hairstyle_json = session.get('hairstyle_suggestions', '{"suggestions": []}')
     hairstyle_data = json.loads(hairstyle_json)
 
     matched_outfits = match_outfits(user)
@@ -381,8 +529,7 @@ def hairstyles():
         'hair_texture': session.get('hair_texture', 'Straight')
     }
 
-    hairstyle_json = session.get('hairstyle_suggestions',
-                                 '{"suggestions": []}')
+    hairstyle_json = session.get('hairstyle_suggestions', '{"suggestions": []}')
     hairstyle_data = json.loads(hairstyle_json)
 
     return render_template('hairstyles.html',
@@ -397,12 +544,40 @@ def confirm_payment():
     outfit_name = request.form.get('outfit_name', 'N/A')
 
     if paid == "yes":
-        # Payment success — show thank you page
+        # Update payment status in database
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                '''UPDATE payments 
+                   SET status = 'confirmed', confirmed_at = GETDATE() 
+                   WHERE transaction_id = ?''',
+                (transaction_id,))
+            conn.commit()
+            cursor.close()
+            conn.close()
+        except Exception as e:
+            print(f"Error updating payment status: {e}")
+        
         return render_template('thankyou1.html',
                                transaction_id=transaction_id,
                                outfit_name=outfit_name)
     else:
-        # Payment cancelled or failed
+        # Update payment status to failed
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                '''UPDATE payments 
+                   SET status = 'failed' 
+                   WHERE transaction_id = ?''',
+                (transaction_id,))
+            conn.commit()
+            cursor.close()
+            conn.close()
+        except Exception as e:
+            print(f"Error updating payment status: {e}")
+        
         return render_template('payment_failed.html',
                                transaction_id=transaction_id)
 
@@ -412,18 +587,24 @@ def initiate_payment():
     amount = request.args.get('amount', '10.00')
     purpose = request.args.get('purpose', 'VirtualTryOn')
     outfit_name = request.args.get('outfit', '')
+    
     if 'user_id' not in session:
         return redirect(url_for('profile'))
+    
     transaction_id = f"TXN{uuid.uuid4().hex[:12].upper()}"
-    conn = sqlite3.connect('fashion_fit.db')
-    c = conn.cursor()
-    c.execute(
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
         '''INSERT INTO payments (transaction_id, user_id, amount, purpose, status)
                  VALUES (?, ?, ?, ?, 'pending')''',
         (transaction_id, session['user_id'], float(amount), purpose))
     conn.commit()
+    cursor.close()
     conn.close()
+    
     upi_url = f"upi://pay?pa={UPI_ID}&pn={UPI_NAME}&am={amount}&cu=INR&tn={transaction_id}-{purpose}"
+    
     return render_template('payment.html',
                            transaction_id=transaction_id,
                            amount=amount,
@@ -435,7 +616,16 @@ def initiate_payment():
                            user_name=session.get('user_name', 'Friend'))
 
 
-# ... (rest of the payment and virtual try-on routes remain the same)
+@app.route('/health')
+def health():
+    """Health check endpoint for Azure App Service"""
+    try:
+        conn = get_db_connection()
+        conn.close()
+        return jsonify({"status": "healthy", "database": "connected"}), 200
+    except Exception as e:
+        return jsonify({"status": "unhealthy", "error": str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
