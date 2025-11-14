@@ -32,6 +32,12 @@ GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 UPI_ID = os.environ.get('UPI_ID', 'your-upi@bank')
 UPI_NAME = os.environ.get('UPI_NAME', 'Your Name')
 
+# 👇 Frontend (Blob static website) base URL
+FRONTEND_URL = os.environ.get(
+    'FRONTEND_URL',
+    'https://aifashionfitstorage.z30.web.core.windows.net'
+)
+
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
@@ -341,6 +347,7 @@ Make suggestions practical, modern, and specifically tailored to their face shap
                 "products_needed": ["Styling cream", "Hair spray"],
                 "styling_tips": "Consult with a professional stylist for best results"
             }]
+
         }
 
 
@@ -400,7 +407,8 @@ def index():
 
 @app.route('/profile')
 def profile():
-    return render_template('profile.html')
+    # Redirect backend /profile to Blob static profile page
+    return redirect(f"{FRONTEND_URL}/profile.html")
 
 
 @app.route('/analyze', methods=['POST'])
@@ -408,7 +416,7 @@ def analyze():
     name = request.form.get('name')
     age_str = request.form.get('age')
     if not age_str:
-        return redirect(url_for('profile'))
+        return redirect(f"{FRONTEND_URL}/profile.html")
     age = int(age_str)
     gender = request.form.get('gender')
     skin_tone = request.form.get('skin_tone')
@@ -416,14 +424,14 @@ def analyze():
 
     if not all([name, age, gender, skin_tone, body_shape]):
         print("❌ Missing required fields!")
-        return redirect(url_for('profile'))
+        return redirect(f"{FRONTEND_URL}/profile.html")
 
     if 'photo' not in request.files:
-        return redirect(url_for('profile'))
+        return redirect(f"{FRONTEND_URL}/profile.html")
 
     file = request.files['photo']
     if not file.filename or file.filename == '':
-        return redirect(url_for('profile'))
+        return redirect(f"{FRONTEND_URL}/profile.html")
 
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
@@ -475,13 +483,13 @@ def analyze():
 
         return redirect(url_for('recommendations'))
 
-    return redirect(url_for('profile'))
+    return redirect(f"{FRONTEND_URL}/profile.html")
 
 
 @app.route('/recommendations')
 def recommendations():
     if 'user_id' not in session:
-        return redirect(url_for('profile'))
+        return redirect(f"{FRONTEND_URL}/profile.html")
 
     user = {
         'name': session.get('user_name'),
@@ -518,7 +526,7 @@ def recommendations():
 def hairstyles():
     """Dedicated page for hairstyle suggestions"""
     if 'user_id' not in session:
-        return redirect(url_for('profile'))
+        return redirect(f"{FRONTEND_URL}/profile.html")
 
     user = {
         'name': session.get('user_name'),
@@ -589,7 +597,7 @@ def initiate_payment():
     outfit_name = request.args.get('outfit', '')
     
     if 'user_id' not in session:
-        return redirect(url_for('profile'))
+        return redirect(f"{FRONTEND_URL}/profile.html")
     
     transaction_id = f"TXN{uuid.uuid4().hex[:12].upper()}"
     
