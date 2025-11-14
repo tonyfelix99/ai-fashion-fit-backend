@@ -1,0 +1,226 @@
+[
+  {
+    "name": "Casual Summer Vibes",
+    "description": "Light and breezy outfit perfect for warm days",
+    "gender": "Female",
+    "skin_tones": ["Fair", "Wheatish"],
+    "body_shapes": ["Slim", "Average"],
+    "age_group": "18-30",
+    "items": {
+      "top": {
+        "name": "Pastel Pink Crop Top",
+        "price": "₹799",
+        "link": "https://amzn.to/example1",
+        "image": "https://images.unsplash.com/photo-1594633312681-425c7b97ccd1?w=400"
+      },
+      "bottom": {
+        "name": "High-Waist Denim Shorts",
+        "price": "₹1299",
+        "link": "https://myntra.com/example2",
+        "image": "https://images.unsplash.com/photo-1591195853828-11db59a44f6b?w=400"
+      },
+      "accessories": {
+        "name": "Straw Sunhat & Sunglasses",
+        "price": "₹599",
+        "link": "https://ajio.com/example3",
+        "image": "https://images.unsplash.com/photo-1523359346063-d879354c0ea5?w=400"
+      }
+    }
+  },
+  {
+    "name": "Office Professional",
+    "description": "Smart formal outfit for workplace confidence",
+    "gender": "Male",
+    "skin_tones": ["Wheatish", "Dark"],
+    "body_shapes": ["Average", "Curvy"],
+    "age_group": "25-45",
+    "items": {
+      "top": {
+        "name": "White Formal Shirt",
+        "price": "₹1499",
+        "link": "https://amzn.to/example4",
+        "image": "https://images.unsplash.com/photo-1602810318383-e386cc2a3ccf?w=400"
+      },
+      "bottom": {
+        "name": "Navy Blue Formal Trousers",
+        "price": "₹1999",
+        "link": "https://myntra.com/example5",
+        "image": "https://images.unsplash.com/photo-1594633312681-425c7b97ccd1?w=400"
+      },
+      "accessories": {
+        "name": "Leather Belt & Watch",
+        "price": "₹899",
+        "link": "https://ajio.com/example6",
+        "image": "https://images.unsplash.com/photo-1524592094714-0f0654e20314?w=400"
+      }
+    }
+  },
+  {
+    "name": "Party Night Glam",
+    "description": "Stunning outfit for evening parties and events",
+    "gender": "Female",
+    "skin_tones": ["Fair", "Wheatish", "Dark"],
+    "body_shapes": ["Slim", "Average", "Curvy"],
+    "age_group": "20-35",
+    "items": {
+      "top": {
+        "name": "Sequin Crop Top",
+        "price": "₹1599",
+        "link": "https://amzn.to/example7",
+        "image": "https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?w=400"
+      },
+      "bottom": {
+        "name": "Black Shimmer Midi Skirt",
+        "price": "₹1899",
+        "link": "https://myntra.com/example8",
+        "image": "https://images.unsplash.com/photo-1583496661160-fb5886a0aaaa?w=400"
+      },
+      "accessories": {
+        "name": "Statement Earrings & Clutch",
+        "price": "₹799",
+        "link": "https://ajio.com/example9",
+        "image": "https://images.unsplash.com/photo-1535632066927-ab7c9ab60908?w=400"
+      }
+    }
+  },
+  {
+    "name": "Casual Street Style",
+    "description": "Trendy and comfortable for everyday wear",
+    "gender": "Male",
+    "skin_tones": ["Honey"],
+    "body_shapes": ["Mesomorph"],
+    "age_group": "18-30",
+    "items": {
+      "top": {
+        "name": "Men's Pure Cotton Utility Shirt | Full Sleeve Casual Button-Down with Dual Chest Pockets",
+        "price": "₹699",
+        "link": "https://www.amazon.in/Veirdo%C2%AE-Button-Down-Comfortable-Everyday-VD_FS_RC_SH_RST_M/dp/B0FV947917/ref=sxin_14_pa_sp_search_thematic_sspa?content-id=amzn1.sym.88162dec-e7ad-44a4-bc35-c1ae6ac07aba%3Aamzn1.sym.88162dec-e7ad-44a4-bc35-c1ae6ac07aba&crid=K95PX1TPIBCU&cv_ct_cx=mens%2Bshirt%2Bcotton&keywords=mens%2Bshirt%2Bcotton&pd_rd_i=B0FV947917&pd_rd_r=57b54eac-2cb2-4118-9755-fda2e4a6c86e&pd_rd_w=WWWvq&pd_rd_wg=VEJHr&pf_rd_p=88162dec-e7ad-44a4-bc35-c1ae6ac07aba&pf_rd_r=D57FC3QVHDA1E49DHQT2&qid=1762954943&s=apparel&sbo=RZvfv%2F%2FHxDF%2BO5021pAnSA%3D%3D&sprefix=mens%2Bshirt%2Capparel%2C337&sr=1-1-883a54c7-f466-4d42-997c-6d482a360a1a-spons&aref=m5h6mvV5oA&sp_csd=d2lkZ2V0TmFtZT1zcF9zZWFyY2hfdGhlbWF0aWM&th=1&psc=1",
+        "image": "https://m.media-amazon.com/images/I/61cGq20b7XL._SY741_.jpg"
+      },
+      "bottom": {
+        "name": "Slim Fit Black Jeans",
+        "price": "₹1599",
+        "link": "https://www.amazon.in/Ben-Martin-Relaxed-BMW-JJ3-DARK-p4-28_Dark-Blue_28/dp/B01FPI95OI/ref=pd_sim_d_sccl_3_2/262-2415224-9444225?pd_rd_w=KrGon&content-id=amzn1.sym.1f02df7f-f362-4e6d-9a92-f270d75713e4&pf_rd_p=1f02df7f-f362-4e6d-9a92-f270d75713e4&pf_rd_r=YW3WAP5KYYHA839S2W2D&pd_rd_wg=hwvGB&pd_rd_r=83d8e18f-be32-4ece-909e-2ac3e0a292f9&pd_rd_i=B019XR5H1M&th=1&psc=1",
+        "image": "https://m.media-amazon.com/images/I/616xchp1ECL._SY741_.jpg"
+      },
+      "accessories": {
+        "name": "Sneakers & Cap",
+        "price": "₹1299",
+        "link": "https://ajio.com/example12",
+        "image": "https://images.unsplash.com/photo-1600185365926-3a2ce3cdb9eb?w=400"
+      }
+    }
+  },
+  {
+    "name": "Ethnic Elegance",
+    "description": "Traditional outfit with modern touch",
+    "gender": "Female",
+    "skin_tones": ["Wheatish", "Dark"],
+    "body_shapes": ["Average", "Curvy"],
+    "age_group": "22-40",
+    "items": {
+      "top": {
+        "name": "Embroidered Kurta",
+        "price": "₹1999",
+        "link": "https://amzn.to/example13",
+        "image": "https://images.unsplash.com/photo-1610030469983-98e550d6193c?w=400"
+      },
+      "bottom": {
+        "name": "Palazzo Pants",
+        "price": "₹1299",
+        "link": "https://myntra.com/example14",
+        "image": "https://images.unsplash.com/photo-1594633312681-425c7b97ccd1?w=400"
+      },
+      "accessories": {
+        "name": "Jhumka Earrings & Dupatta",
+        "price": "₹899",
+        "link": "https://ajio.com/example15",
+        "image": "https://images.unsplash.com/photo-1535632066927-ab7c9ab60908?w=400"
+      }
+    }
+  },
+  {
+    "name": "Smart Casual Weekend",
+    "description": "Perfect balance of comfort and style",
+    "gender": "Male",
+    "skin_tones": ["Fair", "Wheatish", "Dark"],
+    "body_shapes": ["Slim", "Average", "Curvy"],
+    "age_group": "25-50",
+    "items": {
+      "top": {
+        "name": "Cotton Polo Shirt",
+        "price": "₹999",
+        "link": "https://amzn.to/example16",
+        "image": "https://images.unsplash.com/photo-1586790170083-2f9ceadc732d?w=400"
+      },
+      "bottom": {
+        "name": "Khaki Chinos",
+        "price": "₹1799",
+        "link": "https://myntra.com/example17",
+        "image": "https://images.unsplash.com/photo-1473966968600-fa801b869a1a?w=400"
+      },
+      "accessories": {
+        "name": "Loafers & Leather Wallet",
+        "price": "₹1599",
+        "link": "https://ajio.com/example18",
+        "image": "https://images.unsplash.com/photo-1542219550-37153d387c27?w=400"
+      }
+    }
+  },
+  {
+    "name": "Boho Chic",
+    "description": "Free-spirited and stylish for casual outings",
+    "gender": "Female",
+    "skin_tones": ["Fair"],
+    "body_shapes": ["Triangle"],
+    "age_group": "20-35",
+    "items": {
+      "top": {
+        "name": "A beige ribbed wrap style top with V-neck",
+        "price": "₹599",
+        "link": "https://littleboxindia.com/products/solid-ribbed-v-neck-full-sleeves-wrap-top-in-vanilla?variant=50868879687967&country=IN&currency=INR",
+        "image": "https://littleboxindia.com/cdn/shop/files/Solid_Ribbed_V-Neck_Full_Sleeves_Wrap_Top_In_Vanilla.webp?v=1746517765"
+      },
+      "bottom": {
+        "name": "High-rise, wide-leg pleated trousers",
+        "price": "₹499",
+        "link": "https://www.amazon.in/KOTTY-Womens-Solid-Style-Office/dp/B0FJ685FQR?th=1&psc=1",
+        "image": "https://m.media-amazon.com/images/I/51tPcn2gUAL._SY741_.jpg"
+      },
+      "accessories": {
+        "name": "Layered Necklace & Tote Bag",
+        "price": "₹699",
+        "link": "https://www.tanishq.co.in/product/modish-22-karat-yellow-gold-floral-drop-earrings-511018difaga00.html?lang=en_IN",
+        "image": "https://www.tanishq.co.in/dw/image/v2/BKCK_PRD/on/demandware.static/-/Sites-Tanishq-product-catalog/default/dw485b984a/images/hi-res/511018DIFAGA00_1.jpg?sw=640&sh=640"
+      }
+    }
+  },
+  {
+    "name": "Sporty Active",
+    "description": "Athletic wear for gym and outdoor activities",
+    "gender": "Male",
+    "skin_tones": ["Honey"],
+    "body_shapes": ["Mesomorph"],
+    "age_group": "18-40",
+    "items": {
+      "top": {
+        "name": "Performance T-Shirt",
+        "price": "₹899",
+        "link": "https://amzn.to/example22",
+        "image": "https://images.unsplash.com/photo-1556821840-3a63f95609a7?w=400"
+      },
+      "bottom": {
+        "name": "Track Pants",
+        "price": "₹1299",
+        "link": "https://myntra.com/example23",
+        "image": "https://images.unsplash.com/photo-1506629082955-511b1aa562c8?w=400"
+      },
+      "accessories": {
+        "name": "Sports Watch & Gym Bag",
+        "price": "₹1099",
+        "link": "https://ajio.com/example24",
+        "image": "https://images.unsplash.com/photo-1523170335258-f5ed11844a49?w=400"
+      }
+    }
+  }
+]
