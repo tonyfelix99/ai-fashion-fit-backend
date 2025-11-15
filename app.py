@@ -3,7 +3,7 @@ import json
 import sqlite3
 import uuid
 from datetime import datetime
-from flask import Flask, request, jsonify, session
+from flask import Flask, request, jsonify, session, make_response
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import google.generativeai as genai
@@ -11,13 +11,22 @@ from PIL import Image
 import io
 
 app = Flask(__name__)
-CORS(app, 
-     supports_credentials=True,
-     origins=['https://aifashionfitstorage.z30.web.core.windows.net/'],  # In production, replace with your frontend domain
-     allow_headers=['Content-Type', 'Authorization'],
-     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
 
-app.secret_key = os.environ.get('SESSION_SECRET', 'dev-secret-key-change-in-production')
+# CRITICAL FIX: Proper CORS configuration for Azure Static Web Apps
+CORS(app, 
+     resources={r"/api/*": {
+         "origins": ["https://aifashionfitstorage.z30.web.core.windows.net", "*"],
+         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+         "allow_headers": ["Content-Type", "Authorization"],
+         "supports_credentials": True,
+         "expose_headers": ["Content-Type"]
+     }})
+
+# Session configuration for cross-origin requests
+app.secret_key = os.environ.get('SESSION_SECRET', 'dev-secret-key-change-in-production-12345')
+app.config['SESSION_COOKIE_SAMESITE'] = 'None'
+app.config['SESSION_COOKIE_SECURE'] = True  # Required for HTTPS
+app.config['SESSION_COOKIE_HTTPONLY'] = True
 
 UPLOAD_FOLDER = 'static/uploads'
 GENERATED_FOLDER = 'static/generated'
@@ -25,9 +34,8 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['GENERATED_FOLDER'] = GENERATED_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
-# Create folders if they don't exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(GENERATED_FOLDER, exist_ok=True)
 
@@ -39,13 +47,24 @@ if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
 
+# Add CORS headers to all responses
+@app.after_request
+def after_request(response):
+    origin = request.headers.get('Origin')
+    if origin:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    return response
+
+
 def init_db():
-    """Initialize database with all tables and run migrations"""
+    """Initialize database"""
     print("🔄 Initializing database...")
     conn = sqlite3.connect('fashion_fit.db')
     c = conn.cursor()
     
-    # Create user_info table
     c.execute('''CREATE TABLE IF NOT EXISTS user_info (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT,
@@ -60,7 +79,6 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
     
-    # Create payments table
     c.execute('''CREATE TABLE IF NOT EXISTS payments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         transaction_id TEXT UNIQUE,
@@ -74,62 +92,30 @@ def init_db():
     
     conn.commit()
     
-    # Run migrations for existing databases
-    print("🔄 Running migrations...")
-    
-    # Get existing columns
     c.execute("PRAGMA table_info(user_info)")
     existing_columns = [col[1] for col in c.fetchall()]
     
-    # Add face_shape if missing
     if 'face_shape' not in existing_columns:
         try:
             c.execute("ALTER TABLE user_info ADD COLUMN face_shape TEXT DEFAULT 'Oval'")
             print("✅ Added face_shape column")
-        except sqlite3.OperationalError as e:
-            print(f"⚠️  face_shape migration error: {e}")
+        except: pass
     
-    # Add hair_texture if missing
     if 'hair_texture' not in existing_columns:
         try:
             c.execute("ALTER TABLE user_info ADD COLUMN hair_texture TEXT DEFAULT 'Straight'")
             print("✅ Added hair_texture column")
-        except sqlite3.OperationalError as e:
-            print(f"⚠️  hair_texture migration error: {e}")
+        except: pass
     
-    # Add hairstyle_suggestions if missing
     if 'hairstyle_suggestions' not in existing_columns:
         try:
             c.execute("ALTER TABLE user_info ADD COLUMN hairstyle_suggestions TEXT")
             print("✅ Added hairstyle_suggestions column")
-        except sqlite3.OperationalError as e:
-            print(f"⚠️  hairstyle_suggestions migration error: {e}")
-    
-    # Add created_at if missing
-    if 'created_at' not in existing_columns:
-        try:
-            c.execute("ALTER TABLE user_info ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
-            print("✅ Added created_at column")
-        except sqlite3.OperationalError as e:
-            print(f"⚠️  created_at migration error: {e}")
+        except: pass
     
     conn.commit()
-    
-    # Verify final structure
-    c.execute("PRAGMA table_info(user_info)")
-    columns = c.fetchall()
-    print("\n📊 Final user_info table structure:")
-    for col in columns:
-        print(f"   - {col[1]} ({col[2]})")
-    
-    c.execute("PRAGMA table_info(payments)")
-    columns = c.fetchall()
-    print("\n💳 Final payments table structure:")
-    for col in columns:
-        print(f"   - {col[1]} ({col[2]})")
-    
     conn.close()
-    print("✨ Database initialization complete!\n")
+    print("✨ Database ready!\n")
 
 
 init_db()
@@ -140,7 +126,7 @@ def allowed_file(filename):
 
 
 def analyze_user_photo(img_path):
-    """Enhanced photo analysis including face shape and hair texture"""
+    """Photo analysis with AI"""
     if not GEMINI_API_KEY:
         return {
             "skin_tone": "Medium",
@@ -157,7 +143,7 @@ def analyze_user_photo(img_path):
             img_data = f.read()
         img = Image.open(io.BytesIO(img_data))
 
-        prompt = """Analyze this person's appearance comprehensively and return ONLY a JSON object with this exact format:
+        prompt = """Analyze this person's appearance and return ONLY a JSON object:
 {
     "skin_tone": "Fair/Wheatish/Dark",
     "body_shape": "Slim/Average/Curvy",
@@ -165,24 +151,12 @@ def analyze_user_photo(img_path):
     "hair_texture": "Straight/Wavy/Curly/Coily",
     "current_hair_length": "Short/Medium/Long",
     "hair_color": "Black/Brown/Blonde/Red/Gray/Other"
-}
-
-Be specific and accurate in your assessment."""
+}"""
 
         response = model.generate_content([prompt, img])
         response_text = response.text.strip()
-
-        # Clean up response
-        if response_text.startswith('```json'):
-            response_text = response_text[7:]
-        if response_text.startswith('```'):
-            response_text = response_text[3:]
-        if response_text.endswith('```'):
-            response_text = response_text[:-3]
-        response_text = response_text.strip()
-
-        result = json.loads(response_text)
-        return result
+        response_text = response_text.replace('```json', '').replace('```', '').strip()
+        return json.loads(response_text)
     except Exception as e:
         print(f"Error analyzing photo: {e}")
         return {
@@ -196,130 +170,94 @@ Be specific and accurate in your assessment."""
 
 
 def generate_hairstyle_suggestions(user_analysis, user_gender, user_age):
-    """Generate personalized hairstyle suggestions using Gemini AI"""
+    """Generate hairstyle suggestions"""
     if not GEMINI_API_KEY:
-        return {
-            "suggestions": [{
-                "name": "Classic Layered Cut",
-                "description": "A versatile style that suits most face shapes",
-                "best_for": "Everyday wear",
-                "maintenance": "Low",
-                "styling_time": "10-15 minutes",
-                "products_needed": ["Styling cream"],
-                "styling_tips": "Blow dry with a round brush"
-            }]
-        }
+        return {"suggestions": [{
+            "name": "Classic Layered Cut",
+            "description": "A versatile style that suits most face shapes",
+            "best_for": "Everyday wear",
+            "maintenance": "Low",
+            "styling_time": "10-15 minutes",
+            "products_needed": ["Styling cream"],
+            "styling_tips": "Blow dry with a round brush"
+        }]}
 
     try:
         model = genai.GenerativeModel("gemini-2.0-flash-exp")
-        prompt = f"""You are a professional hairstylist AI. Based on the following client profile, suggest 5 specific hairstyles:
+        prompt = f"""Professional hairstylist suggestions for:
+- Gender: {user_gender}, Age: {user_age}
+- Face: {user_analysis.get('face_shape', 'Oval')}
+- Hair: {user_analysis.get('hair_texture', 'Straight')}
 
-Client Profile:
-- Gender: {user_gender}
-- Age: {user_age}
-- Face Shape: {user_analysis.get('face_shape', 'Oval')}
-- Hair Texture: {user_analysis.get('hair_texture', 'Straight')}
-- Current Hair Length: {user_analysis.get('current_hair_length', 'Medium')}
-- Hair Color: {user_analysis.get('hair_color', 'Black')}
-- Skin Tone: {user_analysis.get('skin_tone', 'Medium')}
-
-Provide ONLY a JSON array with 5 hairstyle suggestions in this exact format:
-[
-    {{
-        "name": "Hairstyle Name",
-        "description": "Why this suits their face shape and features (2-3 sentences)",
-        "best_for": "What occasions/lifestyle this works for",
-        "maintenance": "Low/Medium/High",
-        "styling_time": "5-10 minutes/10-20 minutes/20+ minutes",
-        "products_needed": ["Product 1", "Product 2"],
-        "styling_tips": "Quick tip on how to style it"
-    }}
-]
-
-Make suggestions practical, modern, and specifically tailored to their face shape and hair texture."""
+Return ONLY JSON array with 5 hairstyles:
+[{{"name": "...", "description": "...", "best_for": "...", "maintenance": "Low/Medium/High", "styling_time": "...", "products_needed": ["..."], "styling_tips": "..."}}]"""
 
         response = model.generate_content(prompt)
-        response_text = response.text.strip()
-
-        if response_text.startswith('```json'):
-            response_text = response_text[7:]
-        if response_text.startswith('```'):
-            response_text = response_text[3:]
-        if response_text.endswith('```'):
-            response_text = response_text[:-3]
-        response_text = response_text.strip()
-
-        suggestions = json.loads(response_text)
-        return {"suggestions": suggestions}
-
+        response_text = response.text.strip().replace('```json', '').replace('```', '').strip()
+        return {"suggestions": json.loads(response_text)}
     except Exception as e:
-        print(f"Error generating hairstyle suggestions: {e}")
+        print(f"Error generating hairstyles: {e}")
         return {"suggestions": []}
 
 
 def match_outfits(user):
-    """Match outfits based on user's profile"""
+    """Match outfits from JSON"""
     try:
         with open("outfits.json") as f:
             outfits = json.load(f)
-    except FileNotFoundError:
+    except:
         return []
 
     matched = []
-    user_age = user["age"]
-    user_gender = user["gender"].lower()
-    user_skin_tone = user["skin_tone"]
-    user_body_shape = user["body_shape"]
-
     for outfit in outfits:
         age_group = outfit.get("age_group", "18-100")
-        age_parts = age_group.split("-")
-        min_age = int(age_parts[0])
-        max_age = int(age_parts[1]) if len(age_parts) > 1 else 100
-
-        outfit_gender = outfit.get("gender", "").lower()
-        gender_match = (user_gender == outfit_gender or outfit_gender == "unisex")
-        age_match = min_age <= user_age <= max_age
-        skin_match = user_skin_tone in outfit.get("skin_tones", [])
-        body_match = user_body_shape in outfit.get("body_shapes", [])
+        min_age, max_age = map(int, age_group.split("-")) if "-" in age_group else (18, 100)
+        
+        gender_match = user["gender"].lower() == outfit.get("gender", "").lower() or outfit.get("gender", "").lower() == "unisex"
+        age_match = min_age <= user["age"] <= max_age
+        skin_match = user["skin_tone"] in outfit.get("skin_tones", [])
+        body_match = user["body_shape"] in outfit.get("body_shapes", [])
 
         if gender_match and age_match and skin_match and body_match:
             matched.append(outfit)
 
-    return matched[:5] if len(matched) >= 5 else matched
+    return matched[:5]
 
 
 def explain_match(user, outfit):
-    """Generate AI explanation for outfit match"""
+    """Generate explanation"""
     if not GEMINI_API_KEY:
-        return f"This {outfit['name']} is a great match for your style!"
+        return f"This {outfit['name']} complements your style!"
     try:
         model = genai.GenerativeModel("gemini-2.0-flash-exp")
-        prompt = f"""The user is a {user['age']} year old {user['gender']} with {user['skin_tone']} skin tone and {user['body_shape']} body shape.
-Explain in ONE friendly sentence (max 20 words) why '{outfit['name']}' suits them perfectly."""
+        prompt = f"{user['age']}y/o {user['gender']}, {user['skin_tone']} skin, {user['body_shape']} shape. Why '{outfit['name']}' suits them? (20 words max)"
         response = model.generate_content(prompt)
         return response.text.strip()
-    except Exception as e:
-        return f"This {outfit['name']} complements your style perfectly!"
+    except:
+        return f"This {outfit['name']} complements your style!"
 
 
 # API Routes
-@app.route('/api/health', methods=['GET'])
+@app.route('/api/health', methods=['GET', 'OPTIONS'])
 def health():
-    """Health check endpoint"""
-    return jsonify({"status": "ok", "message": "Backend is running"})
+    """Health check"""
+    return jsonify({"status": "ok", "message": "Backend running"}), 200
 
 
-
-@app.route('/api/analyze', methods=['POST'])
+@app.route('/api/analyze', methods=['POST', 'OPTIONS'])
 def analyze():
-    """Analyze user profile and photo"""
+    """Analyze user profile"""
+    if request.method == 'OPTIONS':
+        return '', 204
+        
     try:
         name = request.form.get('name')
         age = int(request.form.get('age', 0))
         gender = request.form.get('gender')
         skin_tone = request.form.get('skin_tone')
         body_shape = request.form.get('body_shape')
+
+        print(f"📝 Analysis request: {name}, {age}, {gender}")
 
         if not all([name, age, gender, skin_tone, body_shape]):
             return jsonify({"error": "Missing required fields"}), 400
@@ -329,12 +267,14 @@ def analyze():
 
         file = request.files['photo']
         if not file.filename or not allowed_file(file.filename):
-            return jsonify({"error": "Invalid file"}), 400
+            return jsonify({"error": "Invalid file type"}), 400
 
         filename = secure_filename(file.filename)
         unique_filename = f"{uuid.uuid4().hex}_{filename}"
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
         file.save(filepath)
+
+        print(f"📸 Photo saved: {filepath}")
 
         # AI analysis
         ai_analysis = analyze_user_photo(filepath)
@@ -354,6 +294,8 @@ def analyze():
         conn.commit()
         conn.close()
 
+        print(f"✅ User saved: ID {user_id}")
+
         # Store in session
         session['user_id'] = user_id
         session['user_name'] = name
@@ -366,22 +308,30 @@ def analyze():
         session['hair_texture'] = ai_analysis.get('hair_texture', 'Straight')
         session['hairstyle_suggestions'] = json.dumps(hairstyle_data)
 
-        return jsonify({
+        response = make_response(jsonify({
             "success": True,
             "user_id": user_id,
             "analysis": ai_analysis,
             "hairstyles": hairstyle_data
-        })
+        }))
+        
+        return response, 200
 
     except Exception as e:
+        print(f"❌ Error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/recommendations', methods=['GET'])
+@app.route('/api/recommendations', methods=['GET', 'OPTIONS'])
 def get_recommendations():
-    """Get outfit and hairstyle recommendations"""
+    """Get recommendations"""
+    if request.method == 'OPTIONS':
+        return '', 204
+        
+    print(f"🔍 Session data: {dict(session)}")
+    
     if 'user_id' not in session:
-        return jsonify({"error": "User not found"}), 401
+        return jsonify({"error": "User not found. Please complete profile analysis first."}), 401
 
     user = {
         'name': session.get('user_name'),
@@ -400,24 +350,26 @@ def get_recommendations():
     matched_outfits = match_outfits(user)
     outfits_with_explanations = []
     for outfit in matched_outfits:
-        explanation = explain_match(user, outfit)
         outfit_copy = outfit.copy()
-        outfit_copy['explanation'] = explanation
+        outfit_copy['explanation'] = explain_match(user, outfit)
         outfits_with_explanations.append(outfit_copy)
 
     return jsonify({
         "user": user,
         "outfits": outfits_with_explanations,
         "hairstyles": hairstyle_data['suggestions']
-    })
+    }), 200
 
 
-@app.route('/api/payment/initiate', methods=['POST'])
+@app.route('/api/payment/initiate', methods=['POST', 'OPTIONS'])
 def initiate_payment():
     """Initiate payment"""
+    if request.method == 'OPTIONS':
+        return '', 204
+        
     data = request.get_json()
     amount = data.get('amount', '10.00')
-    purpose = data.get('purpose', 'VirtualTryOn')
+    purpose = data.get('purpose', 'Coffee')
     
     if 'user_id' not in session:
         return jsonify({"error": "User not found"}), 401
@@ -441,19 +393,21 @@ def initiate_payment():
         "upi_url": upi_url,
         "upi_id": UPI_ID,
         "upi_name": UPI_NAME
-    })
+    }), 200
 
 
-@app.route('/api/payment/confirm', methods=['POST'])
+@app.route('/api/payment/confirm', methods=['POST', 'OPTIONS'])
 def confirm_payment():
-    """Confirm payment status"""
+    """Confirm payment"""
+    if request.method == 'OPTIONS':
+        return '', 204
+        
     data = request.get_json()
     transaction_id = data.get('transaction_id')
     paid = data.get('paid', False)
     
     conn = sqlite3.connect('fashion_fit.db')
     c = conn.cursor()
-    
     status = 'completed' if paid else 'failed'
     c.execute(
         '''UPDATE payments SET status = ?, confirmed_at = ? WHERE transaction_id = ?''',
@@ -465,17 +419,19 @@ def confirm_payment():
         "success": True,
         "status": status,
         "transaction_id": transaction_id
-    })
+    }), 200
 
 
-@app.route('/api/config', methods=['GET'])
+@app.route('/api/config', methods=['GET', 'OPTIONS'])
 def get_config():
-    """Get app configuration for frontend"""
+    """Get config"""
+    if request.method == 'OPTIONS':
+        return '', 204
     return jsonify({
         "upi_id": UPI_ID,
         "upi_name": UPI_NAME,
         "has_gemini": bool(GEMINI_API_KEY)
-    })
+    }), 200
 
 
 if __name__ == '__main__':
