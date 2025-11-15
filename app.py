@@ -46,20 +46,22 @@ def get_db_connection():
     """Create and return Azure SQL Database connection"""
     try:
         connection_string = (
-            f'DRIVER={{ODBC Driver 18 for SQL Server}};'
-            f'SERVER={AZURE_SQL_SERVER};'
-            f'DATABASE={AZURE_SQL_DATABASE};'
-            f'UID={AZURE_SQL_USERNAME};'
-            f'PWD={AZURE_SQL_PASSWORD};'
-            f'Encrypt=yes;'
-            f'TrustServerCertificate=no;'
-            f'Connection Timeout=30;'
+            f"DRIVER={{ODBC Driver 18 for SQL Server}};"
+            f"SERVER={AZURE_SQL_SERVER},1433;"
+            f"DATABASE={AZURE_SQL_DATABASE};"
+            f"UID={AZURE_SQL_USERNAME};"
+            f"PWD={AZURE_SQL_PASSWORD};"
+            f"Encrypt=yes;"
+            f"TrustServerCertificate=yes;"  # <-- Temp fix
+            f"Connection Timeout=30;"
         )
         conn = pyodbc.connect(connection_string)
+        print("✅ Connected to Azure SQL")
         return conn
     except Exception as e:
         print(f"❌ Database connection error: {e}")
         raise
+
 
 
 def init_db():
