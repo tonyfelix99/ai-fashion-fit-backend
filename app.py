@@ -2,45 +2,62 @@ import os
 import json
 import pyodbc
 import uuid
-from datetime import datetime
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify
+from datetime import datetime, timedelta
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 from werkzeug.utils import secure_filename
-from urllib.parse import unquote
 import google.generativeai as genai
 from PIL import Image
 import io
-import requests
+import jwt
+from functools import wraps
+from azure.storage.blob import BlobServiceClient, BlobSasPermissions, generate_blob_sas
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SESSION_SECRET',
-                                'dev-secret-key-change-in-production')
+app.secret_key = os.environ.get('SESSION_SECRET', 'dev-secret-key-change-in-production')
 
-UPLOAD_FOLDER = 'static/uploads'
-GENERATED_FOLDER = 'static/generated'
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
-
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['GENERATED_FOLDER'] = GENERATED_FOLDER
-
-# Azure SQL Database Configuration
-AZURE_SQL_SERVER = os.environ.get('AZURE_SQL_SERVER', '')  # e.g., 'yourserver.database.windows.net'
-AZURE_SQL_DATABASE = os.environ.get('AZURE_SQL_DATABASE', '')  # e.g., 'fashion_fit_db'
-AZURE_SQL_USERNAME = os.environ.get('AZURE_SQL_USERNAME', '')
-AZURE_SQL_PASSWORD = os.environ.get('AZURE_SQL_PASSWORD', '')
-
+# Environment Variables
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://aifashionfitstorage.z30.web.core.windows.net')
+JWT_SECRET = os.environ.get('JWT_SECRET', 'your-jwt-secret-change-in-production')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 UPI_ID = os.environ.get('UPI_ID', 'your-upi@bank')
 UPI_NAME = os.environ.get('UPI_NAME', 'Your Name')
 
-# 👇 Frontend (Blob static website) base URL
-FRONTEND_URL = os.environ.get(
-    'FRONTEND_URL',
-    'https://aifashionfitstorage.z30.web.core.windows.net'
-)
+# Azure SQL Configuration
+AZURE_SQL_SERVER = os.environ.get('AZURE_SQL_SERVER', '')
+AZURE_SQL_DATABASE = os.environ.get('AZURE_SQL_DATABASE', '')
+AZURE_SQL_USERNAME = os.environ.get('AZURE_SQL_USERNAME', '')
+AZURE_SQL_PASSWORD = os.environ.get('AZURE_SQL_PASSWORD', '')
 
+# Azure Blob Storage Configuration
+AZURE_STORAGE_CONNECTION_STRING = os.environ.get('AZURE_STORAGE_CONNECTION_STRING', '')
+AZURE_STORAGE_ACCOUNT_NAME = os.environ.get('AZURE_STORAGE_ACCOUNT_NAME', '')
+AZURE_STORAGE_ACCOUNT_KEY = os.environ.get('AZURE_STORAGE_ACCOUNT_KEY', '')
+
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+
+# CORS Configuration
+CORS(app, 
+     origins=[FRONTEND_URL, "http://localhost:3000", "http://127.0.0.1:5500", "https://aifashionfitstorage.z30.web.core.windows.net"],
+     supports_credentials=True,
+     allow_headers=["Content-Type", "Authorization"],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+
+# Configure Gemini AI
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
+# Initialize Blob Storage Client
+blob_service_client = None
+if AZURE_STORAGE_CONNECTION_STRING:
+    try:
+        blob_service_client = BlobServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
+        print("✅ Connected to Azure Blob Storage")
+    except Exception as e:
+        print(f"⚠️ Could not connect to Blob Storage: {e}")
+
+
+# ========== DATABASE FUNCTIONS ==========
 
 def get_db_connection():
     """Create and return Azure SQL Database connection"""
@@ -52,28 +69,25 @@ def get_db_connection():
             f"UID={AZURE_SQL_USERNAME};"
             f"PWD={AZURE_SQL_PASSWORD};"
             f"Encrypt=yes;"
-            f"TrustServerCertificate=yes;"  # <-- Temp fix
-            f"Connection Timeout=30;"
+            f"TrustServerCertificate=yes;"
+            f"Connection Timeout=60;"
         )
         conn = pyodbc.connect(connection_string)
-        print("✅ Connected to Azure SQL")
         return conn
     except Exception as e:
         print(f"❌ Database connection error: {e}")
         raise
 
 
-
 def init_db():
-    """Initialize database with all tables and migrations"""
+    """Initialize database with all tables"""
     print("🔄 Initializing Azure SQL Database...")
     
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Create user_info table with all columns
-        print("📊 Creating/updating user_info table...")
+        # Create user_info table
         cursor.execute('''
             IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'user_info')
             BEGIN
@@ -84,84 +98,19 @@ def init_db():
                     gender NVARCHAR(50),
                     skin_tone NVARCHAR(100),
                     body_shape NVARCHAR(100),
-                    image_path NVARCHAR(500),
+                    image_url NVARCHAR(500),
                     face_shape NVARCHAR(100) DEFAULT 'Oval',
                     hair_texture NVARCHAR(100) DEFAULT 'Straight',
+                    hair_length NVARCHAR(50),
+                    hair_color NVARCHAR(50),
                     hairstyle_suggestions NVARCHAR(MAX),
                     created_at DATETIME2 DEFAULT GETDATE(),
                     updated_at DATETIME2 DEFAULT GETDATE()
                 )
             END
         ''')
-        print("✅ user_info table ready")
-        
-        # Migration: Add missing columns if table already exists
-        print("🔄 Running migrations for user_info...")
-        
-        # Check and add face_shape column
-        cursor.execute('''
-            IF NOT EXISTS (
-                SELECT * FROM sys.columns 
-                WHERE object_id = OBJECT_ID('user_info') 
-                AND name = 'face_shape'
-            )
-            BEGIN
-                ALTER TABLE user_info ADD face_shape NVARCHAR(100) DEFAULT 'Oval'
-            END
-        ''')
-        
-        # Check and add hair_texture column
-        cursor.execute('''
-            IF NOT EXISTS (
-                SELECT * FROM sys.columns 
-                WHERE object_id = OBJECT_ID('user_info') 
-                AND name = 'hair_texture'
-            )
-            BEGIN
-                ALTER TABLE user_info ADD hair_texture NVARCHAR(100) DEFAULT 'Straight'
-            END
-        ''')
-        
-        # Check and add hairstyle_suggestions column
-        cursor.execute('''
-            IF NOT EXISTS (
-                SELECT * FROM sys.columns 
-                WHERE object_id = OBJECT_ID('user_info') 
-                AND name = 'hairstyle_suggestions'
-            )
-            BEGIN
-                ALTER TABLE user_info ADD hairstyle_suggestions NVARCHAR(MAX)
-            END
-        ''')
-        
-        # Check and add created_at column
-        cursor.execute('''
-            IF NOT EXISTS (
-                SELECT * FROM sys.columns 
-                WHERE object_id = OBJECT_ID('user_info') 
-                AND name = 'created_at'
-            )
-            BEGIN
-                ALTER TABLE user_info ADD created_at DATETIME2 DEFAULT GETDATE()
-            END
-        ''')
-        
-        # Check and add updated_at column
-        cursor.execute('''
-            IF NOT EXISTS (
-                SELECT * FROM sys.columns 
-                WHERE object_id = OBJECT_ID('user_info') 
-                AND name = 'updated_at'
-            )
-            BEGIN
-                ALTER TABLE user_info ADD updated_at DATETIME2 DEFAULT GETDATE()
-            END
-        ''')
-        
-        print("✅ user_info migrations complete")
         
         # Create payments table
-        print("📊 Creating/updating payments table...")
         cursor.execute('''
             IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'payments')
             BEGIN
@@ -171,6 +120,7 @@ def init_db():
                     user_id INT,
                     amount DECIMAL(10, 2),
                     purpose NVARCHAR(255),
+                    outfit_name NVARCHAR(255),
                     status NVARCHAR(50) DEFAULT 'pending',
                     created_at DATETIME2 DEFAULT GETDATE(),
                     confirmed_at DATETIME2,
@@ -178,10 +128,8 @@ def init_db():
                 )
             END
         ''')
-        print("✅ payments table ready")
         
-        # Create indexes for better performance
-        print("🔄 Creating indexes...")
+        # Create indexes
         cursor.execute('''
             IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_user_info_gender_age')
             BEGIN
@@ -195,14 +143,6 @@ def init_db():
                 CREATE INDEX idx_payments_transaction_id ON payments(transaction_id)
             END
         ''')
-        
-        cursor.execute('''
-            IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_payments_user_id')
-            BEGIN
-                CREATE INDEX idx_payments_user_id ON payments(user_id)
-            END
-        ''')
-        print("✅ Indexes created")
         
         conn.commit()
         cursor.close()
@@ -219,34 +159,107 @@ def init_db():
 try:
     init_db()
 except Exception as e:
-    print(f"⚠️  Warning: Could not initialize database on startup: {e}")
+    print(f"⚠️ Warning: Could not initialize database: {e}")
+
+
+# ========== JWT AUTHENTICATION ==========
+
+def create_token(user_data):
+    """Create JWT token for user"""
+    payload = {
+        'user_id': user_data['user_id'],
+        'name': user_data.get('name', ''),
+        'exp': datetime.utcnow() + timedelta(days=7)
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm='HS256')
+
+
+def token_required(f):
+    """Decorator to require valid JWT token"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.headers.get('Authorization')
+        
+        if not token:
+            return jsonify({'error': 'Token missing'}), 401
+        
+        try:
+            # Remove 'Bearer ' prefix if present
+            if token.startswith('Bearer '):
+                token = token[7:]
+            
+            data = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+            request.user_id = data['user_id']
+            request.user_name = data.get('name', '')
+            
+        except jwt.ExpiredSignatureError:
+            return jsonify({'error': 'Token expired'}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({'error': 'Invalid token'}), 401
+        
+        return f(*args, **kwargs)
+    
+    return decorated
+
+
+# ========== BLOB STORAGE FUNCTIONS ==========
+
+def upload_to_blob(file_data, filename, container_name='uploads'):
+    """Upload file to Azure Blob Storage and return URL"""
+    if not blob_service_client:
+        print("⚠️ Blob storage not configured")
+        return None
+    
+    try:
+        # Ensure container exists
+        try:
+            container_client = blob_service_client.get_container_client(container_name)
+            container_client.get_container_properties()
+        except:
+            container_client = blob_service_client.create_container(container_name)
+            print(f"✅ Created container: {container_name}")
+        
+        # Upload blob
+        blob_client = blob_service_client.get_blob_client(container=container_name, blob=filename)
+        blob_client.upload_blob(file_data, overwrite=True)
+        
+        # Return blob URL
+        blob_url = blob_client.url
+        print(f"✅ Uploaded to blob: {blob_url}")
+        return blob_url
+        
+    except Exception as e:
+        print(f"❌ Error uploading to blob: {e}")
+        return None
 
 
 def allowed_file(filename):
-    return '.' in filename and filename.rsplit(
-        '.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    """Check if file extension is allowed"""
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def analyze_user_photo(img_path):
+# ========== AI ANALYSIS FUNCTIONS ==========
+
+def analyze_user_photo(image_data):
     """Enhanced photo analysis including face shape and hair texture"""
     if not GEMINI_API_KEY:
         return {
-            "skin_tone": "Honey",
-            "body_shape": "Mesomorph",
+            "skin_tone": "Medium",
+            "body_shape": "Average",
             "face_shape": "Oval",
-            "hair_texture": "Straight"
+            "hair_texture": "Straight",
+            "current_hair_length": "Medium",
+            "hair_color": "Black"
         }
 
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
-        with open(img_path, "rb") as f:
-            img_data = f.read()
-        img = Image.open(io.BytesIO(img_data))
+        model = genai.GenerativeModel("gemini-2.0-flash-exp")
+        img = Image.open(io.BytesIO(image_data))
 
         prompt = """Analyze this person's appearance comprehensively and return ONLY a JSON object with this exact format:
 {
-    "skin_tone": "Fair/Wheatish/Dark",
-    "body_shape": "Slim/Average/Curvy",
+    "skin_tone": "Fair/Wheatish/Medium/Dark",
+    "body_shape": "Slim/Average/Athletic/Curvy",
     "face_shape": "Oval/Round/Square/Heart/Diamond/Oblong",
     "hair_texture": "Straight/Wavy/Curly/Coily",
     "current_hair_length": "Short/Medium/Long",
@@ -269,11 +282,12 @@ Be specific and accurate in your assessment."""
 
         result = json.loads(response_text)
         return result
+        
     except Exception as e:
-        print(f"Error analyzing photo: {e}")
+        print(f"❌ Error analyzing photo: {e}")
         return {
-            "skin_tone": "Honey",
-            "body_shape": "Mesomorph",
+            "skin_tone": "Medium",
+            "body_shape": "Average",
             "face_shape": "Oval",
             "hair_texture": "Straight",
             "current_hair_length": "Medium",
@@ -288,13 +302,16 @@ def generate_hairstyle_suggestions(user_analysis, user_gender, user_age):
             "suggestions": [{
                 "name": "Classic Layered Cut",
                 "description": "A versatile style that suits most face shapes",
+                "best_for": "Everyday wear",
                 "maintenance": "Low",
-                "styling_time": "10-15 minutes"
+                "styling_time": "10-15 minutes",
+                "products_needed": ["Styling cream"],
+                "styling_tips": "Blow dry for volume"
             }]
         }
 
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash-exp")
 
         prompt = f"""You are a professional hairstylist AI. Based on the following client profile, suggest 5 specific hairstyles:
 
@@ -338,7 +355,7 @@ Make suggestions practical, modern, and specifically tailored to their face shap
         return {"suggestions": suggestions}
 
     except Exception as e:
-        print(f"Error generating hairstyle suggestions: {e}")
+        print(f"❌ Error generating hairstyle suggestions: {e}")
         return {
             "suggestions": [{
                 "name": "Personalized Style",
@@ -349,12 +366,11 @@ Make suggestions practical, modern, and specifically tailored to their face shap
                 "products_needed": ["Styling cream", "Hair spray"],
                 "styling_tips": "Consult with a professional stylist for best results"
             }]
-
         }
 
 
 def match_outfits(user):
-    """Match outfits based on user's exact skin tone, body shape, age, and gender."""
+    """Match outfits based on user's profile"""
     try:
         with open("outfits.json") as f:
             outfits = json.load(f)
@@ -389,253 +405,432 @@ def match_outfits(user):
 
 
 def explain_match(user, outfit):
+    """Generate AI explanation for outfit match"""
     if not GEMINI_API_KEY:
         return f"This {outfit['name']} is a great match for your style!"
+    
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash-exp")
         prompt = f"""The user is a {user['age']} year old {user['gender']} with {user['skin_tone']} skin tone and {user['body_shape']} body shape.
 Explain in ONE friendly sentence (max 20 words) why '{outfit['name']}' suits them perfectly."""
+        
         response = model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
-        print(f"Error generating explanation: {e}")
+        print(f"❌ Error generating explanation: {e}")
         return f"This {outfit['name']} complements your style perfectly!"
 
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+# ========== API ROUTES ==========
+
+@app.route('/api/health', methods=['GET'])
+def health():
+    """Health check endpoint"""
+    try:
+        conn = get_db_connection()
+        conn.close()
+        
+        blob_status = "connected" if blob_service_client else "not configured"
+        gemini_status = "configured" if GEMINI_API_KEY else "not configured"
+        
+        return jsonify({
+            "status": "healthy",
+            "database": "connected",
+            "blob_storage": blob_status,
+            "gemini_ai": gemini_status,
+            "timestamp": datetime.utcnow().isoformat()
+        }), 200
+    except Exception as e:
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e)
+        }), 500
 
 
-@app.route('/profile')
-def profile():
-    # Redirect backend /profile to Blob static profile page
-    return redirect(f"{FRONTEND_URL}/profile.html")
-
-
-@app.route('/analyze', methods=['POST'])
-def analyze():
-    name = request.form.get('name')
-    age_str = request.form.get('age')
-    if not age_str:
-        return redirect(f"{FRONTEND_URL}/profile.html")
-    age = int(age_str)
-    gender = request.form.get('gender')
-    skin_tone = request.form.get('skin_tone')
-    body_shape = request.form.get('body_shape')
-
-    if not all([name, age, gender, skin_tone, body_shape]):
-        print("❌ Missing required fields!")
-        return redirect(f"{FRONTEND_URL}/profile.html")
-
-    if 'photo' not in request.files:
-        return redirect(f"{FRONTEND_URL}/profile.html")
-
-    file = request.files['photo']
-    if not file.filename or file.filename == '':
-        return redirect(f"{FRONTEND_URL}/profile.html")
-
-    if file and allowed_file(file.filename):
+@app.route('/api/analyze', methods=['POST'])
+def api_analyze():
+    """Analyze user photo and create profile"""
+    try:
+        # Get form data
+        name = request.form.get('name')
+        age = request.form.get('age')
+        gender = request.form.get('gender')
+        skin_tone = request.form.get('skin_tone')
+        body_shape = request.form.get('body_shape')
+        
+        # Validate required fields
+        if not all([name, age, gender, skin_tone, body_shape]):
+            return jsonify({'error': 'Missing required fields'}), 400
+        
+        age = int(age)
+        
+        # Check for photo
+        if 'photo' not in request.files:
+            return jsonify({'error': 'No photo uploaded'}), 400
+        
+        file = request.files['photo']
+        if not file.filename or file.filename == '':
+            return jsonify({'error': 'No photo selected'}), 400
+        
+        if not allowed_file(file.filename):
+            return jsonify({'error': 'Invalid file type. Use PNG, JPG, JPEG, or GIF'}), 400
+        
+        # Read file data
+        file_data = file.read()
+        
+        # Generate unique filename
         filename = secure_filename(file.filename)
         unique_filename = f"{uuid.uuid4().hex}_{filename}"
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
-        file.save(filepath)
-
-        # Enhanced AI analysis
-        ai_analysis = analyze_user_photo(filepath)
-
+        
+        # Upload to blob storage
+        image_url = upload_to_blob(file_data, unique_filename)
+        
+        if not image_url:
+            return jsonify({'error': 'Failed to upload image'}), 500
+        
+        # Analyze photo with AI
+        ai_analysis = analyze_user_photo(file_data)
+        
         # Generate hairstyle suggestions
         hairstyle_data = generate_hairstyle_suggestions(ai_analysis, gender, age)
-
-        print(f"\n👤 User Profile Created:")
-        print(f"   Name: {name}")
-        print(f"   Face Shape: {ai_analysis.get('face_shape', 'N/A')}")
-        print(f"   Hair Texture: {ai_analysis.get('hair_texture', 'N/A')}")
-
-        # Save to Azure SQL Database
+        
+        # Save to database
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            '''INSERT INTO user_info (name, age, gender, skin_tone, body_shape, image_path, face_shape, hair_texture, hairstyle_suggestions)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-            (name, age, gender, skin_tone, body_shape, filepath,
+            '''INSERT INTO user_info (name, age, gender, skin_tone, body_shape, image_url, 
+                                     face_shape, hair_texture, hair_length, hair_color, hairstyle_suggestions)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            (name, age, gender, skin_tone, body_shape, image_url,
              ai_analysis.get('face_shape', 'Oval'),
-             ai_analysis.get('hair_texture', 'Straight'), 
-             json.dumps(hairstyle_data)))
+             ai_analysis.get('hair_texture', 'Straight'),
+             ai_analysis.get('current_hair_length', 'Medium'),
+             ai_analysis.get('hair_color', 'Black'),
+             json.dumps(hairstyle_data))
+        )
         
-        # Get the inserted ID
+        # Get inserted user ID
         cursor.execute('SELECT @@IDENTITY AS id')
-        user_id = cursor.fetchone()[0]
+        user_id = int(cursor.fetchone()[0])
         
         conn.commit()
         cursor.close()
         conn.close()
-
-        # Store in session
-        session['user_id'] = user_id
-        session['user_name'] = name
-        session['user_age'] = age
-        session['user_gender'] = gender
-        session['user_skin_tone'] = skin_tone
-        session['user_body_shape'] = body_shape
-        session['user_image'] = filepath
-        session['face_shape'] = ai_analysis.get('face_shape', 'Oval')
-        session['hair_texture'] = ai_analysis.get('hair_texture', 'Straight')
-        session['hairstyle_suggestions'] = json.dumps(hairstyle_data)
-
-        return redirect(url_for('recommendations'))
-
-    return redirect(f"{FRONTEND_URL}/profile.html")
-
-
-@app.route('/recommendations')
-def recommendations():
-    if 'user_id' not in session:
-        return redirect(f"{FRONTEND_URL}/profile.html")
-
-    user = {
-        'name': session.get('user_name'),
-        'age': session.get('user_age'),
-        'gender': session.get('user_gender'),
-        'skin_tone': session.get('user_skin_tone'),
-        'body_shape': session.get('user_body_shape'),
-        'image_path': session.get('user_image'),
-        'face_shape': session.get('face_shape', 'Oval'),
-        'hair_texture': session.get('hair_texture', 'Straight')
-    }
-
-    # Get hairstyle suggestions
-    hairstyle_json = session.get('hairstyle_suggestions', '{"suggestions": []}')
-    hairstyle_data = json.loads(hairstyle_json)
-
-    matched_outfits = match_outfits(user)
-    outfits_with_explanations = []
-    for outfit in matched_outfits:
-        explanation = explain_match(user, outfit)
-        outfit_copy = outfit.copy()
-        outfit_copy['explanation'] = explanation
-        outfits_with_explanations.append(outfit_copy)
-
-    return render_template('recommendations.html',
-                           user=user,
-                           outfits=outfits_with_explanations,
-                           hairstyles=hairstyle_data['suggestions'],
-                           upi_id=UPI_ID,
-                           upi_name=UPI_NAME)
+        
+        # Create JWT token
+        token = create_token({
+            'user_id': user_id,
+            'name': name
+        })
+        
+        print(f"✅ User profile created: {name} (ID: {user_id})")
+        
+        return jsonify({
+            'success': True,
+            'token': token,
+            'user': {
+                'id': user_id,
+                'name': name,
+                'age': age,
+                'gender': gender,
+                'skin_tone': skin_tone,
+                'body_shape': body_shape,
+                'image_url': image_url,
+                'face_shape': ai_analysis.get('face_shape'),
+                'hair_texture': ai_analysis.get('hair_texture'),
+                'hair_length': ai_analysis.get('current_hair_length'),
+                'hair_color': ai_analysis.get('hair_color')
+            },
+            'hairstyles': hairstyle_data['suggestions']
+        }), 201
+        
+    except Exception as e:
+        print(f"❌ Error in analyze: {e}")
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 
-@app.route('/hairstyles')
-def hairstyles():
-    """Dedicated page for hairstyle suggestions"""
-    if 'user_id' not in session:
-        return redirect(f"{FRONTEND_URL}/profile.html")
+@app.route('/api/user', methods=['GET'])
+@token_required
+def api_get_user():
+    """Get user profile"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT * FROM user_info WHERE id = ?', (request.user_id,))
+        row = cursor.fetchone()
+        
+        if not row:
+            return jsonify({'error': 'User not found'}), 404
+        
+        # Parse hairstyle suggestions
+        hairstyle_json = row[10] if row[10] else '{"suggestions": []}'
+        hairstyle_data = json.loads(hairstyle_json)
+        
+        user_data = {
+            'id': row[0],
+            'name': row[1],
+            'age': row[2],
+            'gender': row[3],
+            'skin_tone': row[4],
+            'body_shape': row[5],
+            'image_url': row[6],
+            'face_shape': row[7],
+            'hair_texture': row[8],
+            'hair_length': row[9] if len(row) > 9 else 'Medium',
+            'hair_color': row[10] if len(row) > 10 else 'Black',
+            'hairstyles': hairstyle_data.get('suggestions', [])
+        }
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify(user_data), 200
+        
+    except Exception as e:
+        print(f"❌ Error getting user: {e}")
+        return jsonify({'error': 'Server error'}), 500
 
-    user = {
-        'name': session.get('user_name'),
-        'age': session.get('user_age'),
-        'gender': session.get('user_gender'),
-        'image_path': session.get('user_image'),
-        'face_shape': session.get('face_shape', 'Oval'),
-        'hair_texture': session.get('hair_texture', 'Straight')
-    }
 
-    hairstyle_json = session.get('hairstyle_suggestions', '{"suggestions": []}')
-    hairstyle_data = json.loads(hairstyle_json)
+@app.route('/api/recommendations', methods=['GET'])
+@token_required
+def api_recommendations():
+    """Get outfit recommendations for user"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT * FROM user_info WHERE id = ?', (request.user_id,))
+        row = cursor.fetchone()
+        
+        if not row:
+            return jsonify({'error': 'User not found'}), 404
+        
+        user = {
+            'name': row[1],
+            'age': row[2],
+            'gender': row[3],
+            'skin_tone': row[4],
+            'body_shape': row[5],
+            'image_url': row[6],
+            'face_shape': row[7],
+            'hair_texture': row[8]
+        }
+        
+        cursor.close()
+        conn.close()
+        
+        # Get matched outfits
+        matched_outfits = match_outfits(user)
+        
+        # Add AI explanations
+        outfits_with_explanations = []
+        for outfit in matched_outfits:
+            explanation = explain_match(user, outfit)
+            outfit_copy = outfit.copy()
+            outfit_copy['explanation'] = explanation
+            outfits_with_explanations.append(outfit_copy)
+        
+        return jsonify({
+            'user': user,
+            'outfits': outfits_with_explanations,
+            'upi_id': UPI_ID,
+            'upi_name': UPI_NAME
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error getting recommendations: {e}")
+        return jsonify({'error': 'Server error'}), 500
 
-    return render_template('hairstyles.html',
-                           user=user,
-                           hairstyles=hairstyle_data['suggestions'])
+
+@app.route('/api/hairstyles', methods=['GET'])
+@token_required
+def api_hairstyles():
+    """Get hairstyle suggestions for user"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT hairstyle_suggestions, face_shape, hair_texture FROM user_info WHERE id = ?', 
+                      (request.user_id,))
+        row = cursor.fetchone()
+        
+        if not row:
+            return jsonify({'error': 'User not found'}), 404
+        
+        hairstyle_json = row[0] if row[0] else '{"suggestions": []}'
+        hairstyle_data = json.loads(hairstyle_json)
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify({
+            'hairstyles': hairstyle_data.get('suggestions', []),
+            'face_shape': row[1],
+            'hair_texture': row[2]
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error getting hairstyles: {e}")
+        return jsonify({'error': 'Server error'}), 500
 
 
-@app.route('/confirm_payment', methods=['POST'])
-def confirm_payment():
-    paid = request.form.get('paid')
-    transaction_id = request.form.get('transaction_id')
-    outfit_name = request.form.get('outfit_name', 'N/A')
+@app.route('/api/payment/initiate', methods=['POST'])
+@token_required
+def api_initiate_payment():
+    """Initiate payment transaction"""
+    try:
+        data = request.get_json()
+        amount = float(data.get('amount', 10.00))
+        purpose = data.get('purpose', 'VirtualTryOn')
+        outfit_name = data.get('outfit_name', '')
+        
+        # Generate transaction ID
+        transaction_id = f"TXN{uuid.uuid4().hex[:12].upper()}"
+        
+        # Save to database
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            '''INSERT INTO payments (transaction_id, user_id, amount, purpose, outfit_name, status)
+               VALUES (?, ?, ?, ?, ?, 'pending')''',
+            (transaction_id, request.user_id, amount, purpose, outfit_name)
+        )
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        # Generate UPI URL
+        upi_url = f"upi://pay?pa={UPI_ID}&pn={UPI_NAME}&am={amount}&cu=INR&tn={transaction_id}-{purpose}"
+        
+        print(f"💳 Payment initiated: {transaction_id} for ₹{amount}")
+        
+        return jsonify({
+            'success': True,
+            'transaction_id': transaction_id,
+            'amount': amount,
+            'purpose': purpose,
+            'outfit_name': outfit_name,
+            'upi_url': upi_url,
+            'upi_id': UPI_ID,
+            'upi_name': UPI_NAME
+        }), 201
+        
+    except Exception as e:
+        print(f"❌ Error initiating payment: {e}")
+        return jsonify({'error': 'Server error'}), 500
 
-    if paid == "yes":
-        # Update payment status in database
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
+
+@app.route('/api/payment/confirm', methods=['POST'])
+@token_required
+def api_confirm_payment():
+    """Confirm payment completion"""
+    try:
+        data = request.get_json()
+        transaction_id = data.get('transaction_id')
+        paid = data.get('paid', False)
+        
+        if not transaction_id:
+            return jsonify({'error': 'Transaction ID required'}), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        if paid:
+            # Mark as confirmed
             cursor.execute(
                 '''UPDATE payments 
                    SET status = 'confirmed', confirmed_at = GETDATE() 
-                   WHERE transaction_id = ?''',
-                (transaction_id,))
-            conn.commit()
-            cursor.close()
-            conn.close()
-        except Exception as e:
-            print(f"Error updating payment status: {e}")
-        
-        return render_template('thankyou1.html',
-                               transaction_id=transaction_id,
-                               outfit_name=outfit_name)
-    else:
-        # Update payment status to failed
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
+                   WHERE transaction_id = ? AND user_id = ?''',
+                (transaction_id, request.user_id)
+            )
+            status = 'confirmed'
+            message = 'Payment confirmed successfully'
+        else:
+            # Mark as failed
             cursor.execute(
                 '''UPDATE payments 
                    SET status = 'failed' 
-                   WHERE transaction_id = ?''',
-                (transaction_id,))
-            conn.commit()
-            cursor.close()
-            conn.close()
-        except Exception as e:
-            print(f"Error updating payment status: {e}")
+                   WHERE transaction_id = ? AND user_id = ?''',
+                (transaction_id, request.user_id)
+            )
+            status = 'failed'
+            message = 'Payment marked as failed'
         
-        return render_template('payment_failed.html',
-                               transaction_id=transaction_id)
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        print(f"💳 Payment {status}: {transaction_id}")
+        
+        return jsonify({
+            'success': True,
+            'transaction_id': transaction_id,
+            'status': status,
+            'message': message
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error confirming payment: {e}")
+        return jsonify({'error': 'Server error'}), 500
 
 
-@app.route('/initiate_payment')
-def initiate_payment():
-    amount = request.args.get('amount', '10.00')
-    purpose = request.args.get('purpose', 'VirtualTryOn')
-    outfit_name = request.args.get('outfit', '')
-    
-    if 'user_id' not in session:
-        return redirect(f"{FRONTEND_URL}/profile.html")
-    
-    transaction_id = f"TXN{uuid.uuid4().hex[:12].upper()}"
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        '''INSERT INTO payments (transaction_id, user_id, amount, purpose, status)
-                 VALUES (?, ?, ?, ?, 'pending')''',
-        (transaction_id, session['user_id'], float(amount), purpose))
-    conn.commit()
-    cursor.close()
-    conn.close()
-    
-    upi_url = f"upi://pay?pa={UPI_ID}&pn={UPI_NAME}&am={amount}&cu=INR&tn={transaction_id}-{purpose}"
-    
-    return render_template('payment.html',
-                           transaction_id=transaction_id,
-                           amount=amount,
-                           purpose=purpose,
-                           outfit_name=outfit_name,
-                           upi_url=upi_url,
-                           upi_id=UPI_ID,
-                           upi_name=UPI_NAME,
-                           user_name=session.get('user_name', 'Friend'))
-
-
-@app.route('/health')
-def health():
-    """Health check endpoint for Azure App Service"""
+@app.route('/api/payment/status/<transaction_id>', methods=['GET'])
+@token_required
+def api_payment_status(transaction_id):
+    """Check payment status"""
     try:
         conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            'SELECT status, amount, purpose, outfit_name, created_at, confirmed_at FROM payments WHERE transaction_id = ? AND user_id = ?',
+            (transaction_id, request.user_id)
+        )
+        row = cursor.fetchone()
+        
+        cursor.close()
         conn.close()
-        return jsonify({"status": "healthy", "database": "connected"}), 200
+        
+        if not row:
+            return jsonify({'error': 'Transaction not found'}), 404
+        
+        return jsonify({
+            'transaction_id': transaction_id,
+            'status': row[0],
+            'amount': float(row[1]),
+            'purpose': row[2],
+            'outfit_name': row[3],
+            'created_at': row[4].isoformat() if row[4] else None,
+            'confirmed_at': row[5].isoformat() if row[5] else None
+        }), 200
+        
     except Exception as e:
-        return jsonify({"status": "unhealthy", "error": str(e)}), 500
+        print(f"❌ Error checking payment status: {e}")
+        return jsonify({'error': 'Server error'}), 500
 
+
+# ========== ERROR HANDLERS ==========
+
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': 'Endpoint not found'}), 404
+
+
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({'error': 'Internal server error'}), 500
+
+
+# ========== MAIN ==========
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    print("\n" + "="*50)
+    print("🚀 Fashion Fit AI Backend API")
+    print("="*50)
+    print(f"Frontend URL: {FRONTEND_URL}")
+    print(f"Gemini AI: {'✅ Configured' if GEMINI_API_KEY else '❌ Not configured'}")
+    print(f"Blob Storage: {'✅ Connected' if blob_service_client else '❌ Not configured'}")
+    print("="*50 + "\n")
+    
+    app.run(host='0.0.0.0', port=8000, debug=False)
