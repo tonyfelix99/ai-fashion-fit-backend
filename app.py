@@ -3,7 +3,7 @@ import json
 import sqlite3
 import uuid
 from datetime import datetime
-from flask import Flask, request, jsonify, session, make_response
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import google.generativeai as genai
@@ -12,21 +12,8 @@ import io
 
 app = Flask(__name__)
 
-# CRITICAL FIX: Proper CORS configuration for Azure Static Web Apps
-CORS(app, 
-     resources={r"/api/*": {
-         "origins": ["https://aifashionfitstorage.z30.web.core.windows.net", "*"],
-         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-         "allow_headers": ["Content-Type", "Authorization"],
-         "supports_credentials": True,
-         "expose_headers": ["Content-Type"]
-     }})
-
-# Session configuration for cross-origin requests
-app.secret_key = os.environ.get('SESSION_SECRET', 'dev-secret-key-change-in-production-12345')
-app.config['SESSION_COOKIE_SAMESITE'] = 'None'
-app.config['SESSION_COOKIE_SECURE'] = True  # Required for HTTPS
-app.config['SESSION_COOKIE_HTTPONLY'] = True
+# Simple CORS - No credentials needed!
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 UPLOAD_FOLDER = 'static/uploads'
 GENERATED_FOLDER = 'static/generated'
@@ -45,18 +32,6 @@ UPI_NAME = os.environ.get('UPI_NAME', 'Your Name')
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-
-
-# Add CORS headers to all responses
-@app.after_request
-def after_request(response):
-    origin = request.headers.get('Origin')
-    if origin:
-        response.headers['Access-Control-Allow-Origin'] = origin
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
-    return response
 
 
 def init_db():
@@ -138,7 +113,7 @@ def analyze_user_photo(img_path):
         }
 
     try:
-        model = genai.GenerativeModel("gemini-2.0-flash-exp")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         with open(img_path, "rb") as f:
             img_data = f.read()
         img = Image.open(io.BytesIO(img_data))
@@ -183,7 +158,7 @@ def generate_hairstyle_suggestions(user_analysis, user_gender, user_age):
         }]}
 
     try:
-        model = genai.GenerativeModel("gemini-2.0-flash-exp")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         prompt = f"""Professional hairstylist suggestions for:
 - Gender: {user_gender}, Age: {user_age}
 - Face: {user_analysis.get('face_shape', 'Oval')}
@@ -229,7 +204,7 @@ def explain_match(user, outfit):
     if not GEMINI_API_KEY:
         return f"This {outfit['name']} complements your style!"
     try:
-        model = genai.GenerativeModel("gemini-2.0-flash-exp")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         prompt = f"{user['age']}y/o {user['gender']}, {user['skin_tone']} skin, {user['body_shape']} shape. Why '{outfit['name']}' suits them? (20 words max)"
         response = model.generate_content(prompt)
         return response.text.strip()
@@ -238,18 +213,15 @@ def explain_match(user, outfit):
 
 
 # API Routes
-@app.route('/api/health', methods=['GET', 'OPTIONS'])
+@app.route('/api/health', methods=['GET'])
 def health():
     """Health check"""
     return jsonify({"status": "ok", "message": "Backend running"}), 200
 
 
-@app.route('/api/analyze', methods=['POST', 'OPTIONS'])
+@app.route('/api/analyze', methods=['POST'])
 def analyze():
-    """Analyze user profile"""
-    if request.method == 'OPTIONS':
-        return '', 204
-        
+    """Analyze user profile - NO SESSION NEEDED!"""
     try:
         name = request.form.get('name')
         age = int(request.form.get('age', 0))
@@ -296,144 +268,208 @@ def analyze():
 
         print(f"✅ User saved: ID {user_id}")
 
-        # Store in session
-        session['user_id'] = user_id
-        session['user_name'] = name
-        session['user_age'] = age
-        session['user_gender'] = gender
-        session['user_skin_tone'] = skin_tone
-        session['user_body_shape'] = body_shape
-        session['user_image'] = filepath
-        session['face_shape'] = ai_analysis.get('face_shape', 'Oval')
-        session['hair_texture'] = ai_analysis.get('hair_texture', 'Straight')
-        session['hairstyle_suggestions'] = json.dumps(hairstyle_data)
-
-        response = make_response(jsonify({
+        # Return user_id - Frontend will use it in URL!
+        return jsonify({
             "success": True,
             "user_id": user_id,
             "analysis": ai_analysis,
             "hairstyles": hairstyle_data
-        }))
-        
-        return response, 200
+        }), 200
 
     except Exception as e:
         print(f"❌ Error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/recommendations', methods=['GET', 'OPTIONS'])
+@app.route('/api/recommendations', methods=['GET'])
 def get_recommendations():
-    """Get recommendations"""
-    if request.method == 'OPTIONS':
-        return '', 204
+    """Get recommendations using user_id from URL - NO SESSION!"""
+    try:
+        # Get user_id from URL parameter
+        user_id = request.args.get('user_id')
         
-    print(f"🔍 Session data: {dict(session)}")
-    
-    if 'user_id' not in session:
-        return jsonify({"error": "User not found. Please complete profile analysis first."}), 401
+        print(f"📥 Recommendations request for user_id: {user_id}")
+        
+        if not user_id:
+            return jsonify({"error": "Missing user_id parameter"}), 400
+        
+        # Fetch user from database
+        conn = sqlite3.connect('fashion_fit.db')
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute('SELECT * FROM user_info WHERE id = ?', (user_id,))
+        row = c.fetchone()
+        conn.close()
+        
+        if not row:
+            print(f"❌ User {user_id} not found")
+            return jsonify({"error": "User not found"}), 404
+        
+        print(f"✅ User found: {row['name']}")
+        
+        user = {
+            'name': row['name'],
+            'age': row['age'],
+            'gender': row['gender'],
+            'skin_tone': row['skin_tone'],
+            'body_shape': row['body_shape'],
+            'image_path': row['image_path'],
+            'face_shape': row['face_shape'] or 'Oval',
+            'hair_texture': row['hair_texture'] or 'Straight'
+        }
+        
+        hairstyle_json = row['hairstyle_suggestions'] or '{"suggestions": []}'
+        hairstyle_data = json.loads(hairstyle_json)
+        
+        matched_outfits = match_outfits(user)
+        print(f"👕 Matched {len(matched_outfits)} outfits")
+        
+        outfits_with_explanations = []
+        for outfit in matched_outfits:
+            outfit_copy = outfit.copy()
+            outfit_copy['explanation'] = explain_match(user, outfit)
+            outfits_with_explanations.append(outfit_copy)
+        
+        print(f"📤 Sending recommendations")
+        return jsonify({
+            "user": user,
+            "outfits": outfits_with_explanations,
+            "hairstyles": hairstyle_data['suggestions']
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
-    user = {
-        'name': session.get('user_name'),
-        'age': session.get('user_age'),
-        'gender': session.get('user_gender'),
-        'skin_tone': session.get('user_skin_tone'),
-        'body_shape': session.get('user_body_shape'),
-        'image_path': session.get('user_image'),
-        'face_shape': session.get('face_shape', 'Oval'),
-        'hair_texture': session.get('hair_texture', 'Straight')
-    }
 
-    hairstyle_json = session.get('hairstyle_suggestions', '{"suggestions": []}')
-    hairstyle_data = json.loads(hairstyle_json)
-
-    matched_outfits = match_outfits(user)
-    outfits_with_explanations = []
-    for outfit in matched_outfits:
-        outfit_copy = outfit.copy()
-        outfit_copy['explanation'] = explain_match(user, outfit)
-        outfits_with_explanations.append(outfit_copy)
-
-    return jsonify({
-        "user": user,
-        "outfits": outfits_with_explanations,
-        "hairstyles": hairstyle_data['suggestions']
-    }), 200
-
-
-@app.route('/api/payment/initiate', methods=['POST', 'OPTIONS'])
+@app.route('/api/payment/initiate', methods=['POST'])
 def initiate_payment():
-    """Initiate payment"""
-    if request.method == 'OPTIONS':
-        return '', 204
+    """Initiate payment - using user_id from URL"""
+    try:
+        user_id = request.args.get('user_id')
         
-    data = request.get_json()
-    amount = data.get('amount', '10.00')
-    purpose = data.get('purpose', 'Coffee')
-    
-    if 'user_id' not in session:
-        return jsonify({"error": "User not found"}), 401
+        if not user_id:
+            return jsonify({"error": "Missing user_id"}), 400
+        
+        data = request.get_json()
+        amount = data.get('amount', '10.00')
+        purpose = data.get('purpose', 'Coffee')
 
-    transaction_id = f"TXN{uuid.uuid4().hex[:12].upper()}"
-    
-    conn = sqlite3.connect('fashion_fit.db')
-    c = conn.cursor()
-    c.execute(
-        '''INSERT INTO payments (transaction_id, user_id, amount, purpose, status)
-           VALUES (?, ?, ?, ?, 'pending')''',
-        (transaction_id, session['user_id'], float(amount), purpose))
-    conn.commit()
-    conn.close()
+        transaction_id = f"TXN{uuid.uuid4().hex[:12].upper()}"
+        
+        conn = sqlite3.connect('fashion_fit.db')
+        c = conn.cursor()
+        c.execute(
+            '''INSERT INTO payments (transaction_id, user_id, amount, purpose, status)
+               VALUES (?, ?, ?, ?, 'pending')''',
+            (transaction_id, int(user_id), float(amount), purpose))
+        conn.commit()
+        conn.close()
 
-    upi_url = f"upi://pay?pa={UPI_ID}&pn={UPI_NAME}&am={amount}&cu=INR&tn={transaction_id}-{purpose}"
-    
-    return jsonify({
-        "transaction_id": transaction_id,
-        "amount": amount,
-        "upi_url": upi_url,
-        "upi_id": UPI_ID,
-        "upi_name": UPI_NAME
-    }), 200
+        upi_url = f"upi://pay?pa={UPI_ID}&pn={UPI_NAME}&am={amount}&cu=INR&tn={transaction_id}-{purpose}"
+        
+        return jsonify({
+            "transaction_id": transaction_id,
+            "amount": amount,
+            "upi_url": upi_url,
+            "upi_id": UPI_ID,
+            "upi_name": UPI_NAME
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Payment error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/payment/confirm', methods=['POST', 'OPTIONS'])
+@app.route('/api/payment/confirm', methods=['POST'])
 def confirm_payment():
     """Confirm payment"""
-    if request.method == 'OPTIONS':
-        return '', 204
+    try:
+        data = request.get_json()
+        transaction_id = data.get('transaction_id')
+        paid = data.get('paid', False)
         
-    data = request.get_json()
-    transaction_id = data.get('transaction_id')
-    paid = data.get('paid', False)
-    
-    conn = sqlite3.connect('fashion_fit.db')
-    c = conn.cursor()
-    status = 'completed' if paid else 'failed'
-    c.execute(
-        '''UPDATE payments SET status = ?, confirmed_at = ? WHERE transaction_id = ?''',
-        (status, datetime.now(), transaction_id))
-    conn.commit()
-    conn.close()
+        conn = sqlite3.connect('fashion_fit.db')
+        c = conn.cursor()
+        status = 'completed' if paid else 'failed'
+        c.execute(
+            '''UPDATE payments SET status = ?, confirmed_at = ? WHERE transaction_id = ?''',
+            (status, datetime.now(), transaction_id))
+        conn.commit()
+        conn.close()
 
-    return jsonify({
-        "success": True,
-        "status": status,
-        "transaction_id": transaction_id
-    }), 200
+        return jsonify({
+            "success": True,
+            "status": status,
+            "transaction_id": transaction_id
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/config', methods=['GET', 'OPTIONS'])
+@app.route('/api/config', methods=['GET'])
 def get_config():
     """Get config"""
-    if request.method == 'OPTIONS':
-        return '', 204
     return jsonify({
         "upi_id": UPI_ID,
         "upi_name": UPI_NAME,
         "has_gemini": bool(GEMINI_API_KEY)
     }), 200
 
+OUTFITS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'outfits.json')
 
+# Initialize outfits.json if it doesn't exist
+if not os.path.exists(OUTFITS_FILE):
+    with open(OUTFITS_FILE, 'w', encoding='utf-8') as f:
+        json.dump([], f)
+    print(f"✅ Created outfits.json at {OUTFITS_FILE}")
+
+@app.route('/api/outfits', methods=['GET'])
+def get_outfits():
+    """Get all outfits from JSON file"""
+    try:
+        print(f"📖 GET /api/outfits - Reading from: {OUTFITS_FILE}")
+        if os.path.exists(OUTFITS_FILE):
+            with open(OUTFITS_FILE, 'r', encoding='utf-8') as f:
+                outfits = json.load(f)
+            print(f"✅ Returning {len(outfits)} outfits")
+            return jsonify(outfits), 200
+        else:
+            print("⚠️ File not found, returning empty array")
+            return jsonify([]), 200
+    except Exception as e:
+        print(f"❌ Error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/outfits', methods=['POST'])
+def save_outfits():
+    """Save outfits to JSON file"""
+    try:
+        outfits = request.get_json()
+        print(f"💾 POST /api/outfits - Saving {len(outfits) if outfits else 0} outfits")
+        
+        if outfits is None:
+            return jsonify({"error": "No data provided"}), 400
+            
+        if not isinstance(outfits, list):
+            return jsonify({"error": "Data must be an array"}), 400
+        
+        with open(OUTFITS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(outfits, f, indent=2, ensure_ascii=False)
+        
+        print(f"✅ Saved successfully")
+        return jsonify({"success": True, "message": "Outfits saved successfully"}), 200
+    except Exception as e:
+        print(f"❌ Error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# Debug routes on startup
+print("\n🔍 API Routes:")
+for rule in app.url_map.iter_rules():
+    if '/api/outfits' in rule.rule:
+        print(f"   ✓ {rule.rule} → {list(rule.methods - {'HEAD', 'OPTIONS'})}")
+print()
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
