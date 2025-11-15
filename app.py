@@ -342,7 +342,7 @@ def get_recommendations():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/payment/initiate', methods=['POST'])
+@app.route('/api/payment/initiate', methods=['GET', 'POST'])
 def initiate_payment():
     """Initiate payment - using user_id from URL"""
     try:
@@ -350,13 +350,18 @@ def initiate_payment():
         
         if not user_id:
             return jsonify({"error": "Missing user_id"}), 400
-        
-        data = request.get_json()
-        amount = data.get('amount', '10.00')
-        purpose = data.get('purpose', 'Coffee')
+
+        # If POST: use body values, if GET: defaults
+        if request.method == 'POST':
+            data = request.get_json() or {}
+            amount = data.get('amount', '10.00')
+            purpose = data.get('purpose', 'Coffee')
+        else:
+            amount = '10.00'
+            purpose = 'Coffee'
 
         transaction_id = f"TXN{uuid.uuid4().hex[:12].upper()}"
-        
+
         conn = sqlite3.connect('fashion_fit.db')
         c = conn.cursor()
         c.execute(
@@ -367,15 +372,18 @@ def initiate_payment():
         conn.close()
 
         upi_url = f"upi://pay?pa={UPI_ID}&pn={UPI_NAME}&am={amount}&cu=INR&tn={transaction_id}-{purpose}"
-        
+
         return jsonify({
+            "user_name": f"User {user_id}",
             "transaction_id": transaction_id,
             "amount": amount,
+            "purpose": purpose,
             "upi_url": upi_url,
             "upi_id": UPI_ID,
-            "upi_name": UPI_NAME
+            "upi_name": UPI_NAME,
+            "outfit_name": ""
         }), 200
-        
+
     except Exception as e:
         print(f"❌ Payment error: {str(e)}")
         return jsonify({"error": str(e)}), 500
