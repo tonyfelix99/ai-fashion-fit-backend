@@ -11,7 +11,11 @@ from PIL import Image
 import io
 
 app = Flask(__name__)
-CORS(app, supports_credentials=True, origins=['*'])  # Enable CORS for Azure Storage frontend
+CORS(app, 
+     supports_credentials=True,
+     origins=['https://aifashionfitstorage.z30.web.core.windows.net/'],  # In production, replace with your frontend domain
+     allow_headers=['Content-Type', 'Authorization'],
+     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
 
 app.secret_key = os.environ.get('SESSION_SECRET', 'dev-secret-key-change-in-production')
 
@@ -304,6 +308,7 @@ Explain in ONE friendly sentence (max 20 words) why '{outfit['name']}' suits the
 def health():
     """Health check endpoint"""
     return jsonify({"status": "ok", "message": "Backend is running"})
+
 
 
 @app.route('/api/analyze', methods=['POST'])
