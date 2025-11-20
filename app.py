@@ -364,6 +364,18 @@ def initiate_payment():
 
         conn = sqlite3.connect('fashion_fit.db')
         c = conn.cursor()
+        
+        # Fetch the user's name from the database
+        c.execute('SELECT name FROM users WHERE id = ?', (int(user_id),))
+        user_result = c.fetchone()
+        
+        if not user_result:
+            conn.close()
+            return jsonify({"error": "User not found"}), 404
+        
+        user_name = user_result[0]
+        
+        # Insert payment record
         c.execute(
             '''INSERT INTO payments (transaction_id, user_id, amount, purpose, status)
                VALUES (?, ?, ?, ?, 'pending')''',
@@ -374,7 +386,7 @@ def initiate_payment():
         upi_url = f"upi://pay?pa={UPI_ID}&pn={UPI_NAME}&am={amount}&cu=INR&tn={transaction_id}-{purpose}"
 
         return jsonify({
-            "user_name": f"User {user_id}",
+            "user_name": user_name,  # Now returns actual user name
             "transaction_id": transaction_id,
             "amount": amount,
             "purpose": purpose,
@@ -387,7 +399,6 @@ def initiate_payment():
     except Exception as e:
         print(f"❌ Payment error: {str(e)}")
         return jsonify({"error": str(e)}), 500
-
 
 @app.route('/api/payment/confirm', methods=['POST'])
 def confirm_payment():
